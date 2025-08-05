@@ -106,19 +106,27 @@ end
 % Step 3: Obtain the result via azimuth scaling (Equation 10)
 fprintf('Step 3: Azimuth scaling...\n');
 S3 = zeros(1, M);
-for m = 1:M
-    m_scaled = m - M/2; % Scale m to range [-M/2, M/2-1]
-    if m_scaled >= -M/2 && m_scaled <= M/2-1
-        idx = m_scaled + M/2 + 1; % Convert to MATLAB indexing
-        if idx >= 1 && idx <= gamma_M && idx <= length(U)
-            % Azimuth scaling factor
-            phi_m = kaiser_bessel_window(0, a); % φ(m) at m=0 for scaling
-            if phi_m ~= 0
-                S3(m) = U(idx) / phi_m;
-            end
-        end
-    end
-end
+
+% Method 1: Direct scaling without window correction (simpler approach)
+% Extract the central M points from the oversampled FFT
+start_idx = (gamma_M - M)/2 + 1;
+end_idx = start_idx + M - 1;
+S3 = U(start_idx:end_idx);
+
+% Alternative Method 2: With proper Kaiser-Bessel scaling (more accurate)
+% Uncomment below for window-corrected version:
+% for m = 1:M
+%     m_scaled = m - M/2 - 1; % Scale m to range [-M/2, M/2-1] 
+%     idx = m_scaled + gamma_M/2 + 1; % Index in oversampled array
+%     if idx >= 1 && idx <= gamma_M
+%         % The scaling factor φ(m) should account for the window's frequency response
+%         % For Kaiser-Bessel, this is often approximated as the window value at DC
+%         phi_m = kaiser_bessel_window(0, a);
+%         if phi_m ~= 0
+%             S3(m) = U(idx) / phi_m;
+%         end
+%     end
+% end
 
 % Display results
 figure(10);
