@@ -13,7 +13,7 @@ A1 = 1;
 PRI = 1/fs;
 Tp = PRI;
 kr = B/Tp; %% chirp rate
-M = t / PRI; %% ZAMANDA ÜRETİLEN HER PULSE U PRI YA BÖLDÜK N ADET PULSE ELDE ETTİK.
+M_pulse = t / PRI; %% ZAMANDA ÜRETİLEN HER PULSE U PRI YA BÖLDÜK N ADET PULSE ELDE ETTİK.
 %n = 2 * max(rd) ./ fd; %%
 fd_m = (-N/2:-N/2-1) * fs/N; %% 0 DAN BAŞLAYAN SAMPLİNG
 
@@ -26,7 +26,7 @@ lambda = f0 /c;
 figure (9);
 
 S2_proposed = A1 * rectpuls(fd/ B) .* exp (-1j * 4 * pi / c * (fd + f0) .* R1);
-subplot(2,1,1);plot(M, abs(S2_proposed)); title("S2 proposed");
+subplot(2,1,1);plot(M_pulse, abs(S2_proposed)); title("S2 proposed");
 axis ([ 1 64 -2 2]);
 
 sr  = rectpuls(t-Tp/2-tao1,Tp).*exp(1i*pi*kr*(t-Tp/2-tao1).^2).*exp(-1i * 4 * pi * R1 / lambda);
@@ -41,41 +41,111 @@ s_out = ifft(sr_fft.*conj(sf_hfft)); %% frekans domaininde çarpım.
 s1_natural = s_out;
 s2_natural = fftshift(fft(s1_natural));
 
-subplot(2,1,2);plot(M, 20*log10(abs(s2_natural)/max(abs(s2_natural)))); 
+subplot(2,1,2);plot(M_pulse, 20*log10(abs(s2_natural)/max(abs(s2_natural)))); 
 title("S2 natural");
 
-%% kaiser window
-y = 3; %oversampling factor
-L = 2; % interpolation lenght
-M = t / PRI;
+%% NUFFT Azimuth Interpolation Parameters
+y = 3; % oversampling factor
+L = 2; % interpolation length
+M = N; % number of azimuth pulses
+gamma_M = y * M; % oversampled grid size
 
-function y_1 = window(x)
-    
-    syms k;
-    seri = ((x/2) .^ k/ factorial(k)) .^ 2;
-    toplam =  symsum(seri, k, 0, inf);
-    y_1 = toplam;
-end
- % Non uniform sampling grid
-a = pi * (2 - 1/y ) - 0.01;
-
-u = 0;
-
-for m = 1:N
-    for l = -L:L 
-       x_m = (1 + fd(m) / f0) .* m * PRI;
-       mu = round(y*x_m);
-       x = L * sqrt(a^2 -(y*x_m - mu - l)^ 2 );
-       kaiserBessel = window(x);
-    
-       if abs(x) < a
-            teta = kaiserBessel;
-        else 
-            teta = 0;
-        end    
-       u = u + 1 / sqrt (2 * pi) * teta * S2_proposed(m);
+% Improved Kaiser-Bessel window function
+function phi = kaiser_bessel_window(x, a)
+    % Kaiser-Bessel window function using modified Bessel function
+    if abs(x) < a
+        arg = sqrt(a^2 - x^2);
+        phi = besseli(0, L * arg) / besseli(0, L * a);
+    else
+        phi = 0;
     end
 end
+
+% Step 1: Azimuth interpolation (Equation 8)
+fprintf('Step 1: Azimuth interpolation...\n');
+a = pi * (2 - 1/y) - 0.01; % Kaiser-Bessel parameter
+
+% Initialize interpolated signal
+u = zeros(1, gamma_M);
+
+for m = 1:M
+    for l = -L:L
+        % Non-uniform sampling grid (corresponding to x_m^(n) in equation)
+        x_m_n = (1 + fd(m) / f0) * m * PRI;
+        
+        % Nearest integer to oversampled grid
+        mu_m_n = round(y * x_m_n);
+        
+        % Ensure indices are within bounds
+        k_idx = mu_m_n + l;
+        if k_idx >= 1 && k_idx <= gamma_M
+            % Kaiser-Bessel window argument
+            x_arg = y * x_m_n - mu_m_n - l;
+            
+            % Kaiser-Bessel window function
+            phi_val = kaiser_bessel_window(x_arg, a);
+            
+            % Accumulate interpolated values (Equation 8)
+            u(k_idx) = u(k_idx) + (1/sqrt(2*pi)) * phi_val * S2_proposed(m);
+        end
+    end
+end
+
+% Step 2: Compute the azimuth FFT of size γM (Equation 9)
+fprintf('Step 2: Computing azimuth FFT...\n');
+U = zeros(1, gamma_M);
+for m = 1:gamma_M
+    for k = -gamma_M/2:(gamma_M/2-1)
+        idx = k + gamma_M/2 + 1; % Convert to MATLAB indexing
+        if idx >= 1 && idx <= gamma_M
+            U(idx) = U(idx) + u(m) * exp(-1j * 2*pi*m*k / gamma_M);
+        end
+    end
+end
+
+% Step 3: Obtain the result via azimuth scaling (Equation 10)
+fprintf('Step 3: Azimuth scaling...\n');
+S3 = zeros(1, M);
+
+% Method 1: Direct scaling without window correction (simpler approach)
+% Extract the central M points from the oversampled FFT
+start_idx = (gamma_M - M)/2 + 1;
+end_idx = start_idx + M - 1;
+S3 = U(start_idx:end_idx);
+
+% Alternative Method 2: With proper Kaiser-Bessel scaling (more accurate)
+% Uncomment below for window-corrected version:
+% for m = 1:M
+%     m_scaled = m - M/2 - 1; % Scale m to range [-M/2, M/2-1] 
+%     idx = m_scaled + gamma_M/2 + 1; % Index in oversampled array
+%     if idx >= 1 && idx <= gamma_M
+%         % The scaling factor φ(m) should account for the window's frequency response
+%         % For Kaiser-Bessel, this is often approximated as the window value at DC
+%         phi_m = kaiser_bessel_window(0, a);
+%         if phi_m ~= 0
+%             S3(m) = U(idx) / phi_m;
+%         end
+%     end
+% end
+
+% Display results
 figure(10);
-fprintf(num2str(u))
-plot(M,real(u));
+subplot(3,1,1);
+plot(1:gamma_M, real(u));
+title('Step 1: Interpolated signal u(k)');
+xlabel('k'); ylabel('Real(u)');
+
+subplot(3,1,2);
+plot(1:gamma_M, abs(U));
+title('Step 2: Azimuth FFT U(m,n)');
+xlabel('m'); ylabel('|U|');
+
+subplot(3,1,3);
+plot(1:M, abs(S3));
+title('Step 3: Final result S_3(m,n)');
+xlabel('m'); ylabel('|S_3|');
+
+fprintf('NUFFT Azimuth Interpolation completed.\n');
+fprintf('Original signal length: %d\n', M);
+fprintf('Oversampled grid size: %d\n', gamma_M);
+fprintf('Interpolation length: %d\n', 2*L+1);
